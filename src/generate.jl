@@ -79,7 +79,7 @@ function write_service_method(io, package, service, method)
     import .$(package): $(method_name)
     \"\"\"
         $(method_name)
-    
+
     - input: $input_type
     - output: $output_type
     \"\"\"
@@ -132,6 +132,8 @@ function grpc_protoc(args=``; protoc_path=ProtoBuf.protoc_jll.protoc())
     # we do not want to pass unintended values that sometimes CI environments set
     # we also do not intend to trigger coverage in the plugin while running CI in this package
     ENV′["COVERAGE"] = ""
+    ENV′["JULIA_PROJECT"] = dirname(Base.active_project())
+    @show ENV′
     run(setenv(`$protoc_path --plugin=protoc-gen-julia=$plugin $args`, ENV′))
 end
 
@@ -144,29 +146,38 @@ Generate a gRPC client from protobuf specification file.
 - `outdir`: Directory to write generated code into, created if not present
     already. Existing files if any will be overwtitten.
 """
-function generate(proto::String; outdir::String=pwd(), includes::Vector{String}=String[], protoc_path=ProtoBuf.protoc_jll.protoc())
-    if !isfile(proto)
-        throw(ArgumentError("No such file - $proto"))
+function generate(protos::String...; outdir::String=pwd(), includes::Vector{String}=String[], protoc_path=ProtoBuf.protoc_jll.protoc())
+    protos = abspath.(protos)
+    let missing_files = findall(.!isfile.(protos))
+        if !isempty(missing_files)
+            throw(ArgumentError("No such files: $(join(protos[missing_files], '\n'))"))
+        end
     end
-    proto = abspath(proto)
 
-    @info("Generating gRPC client", proto, outdir)
+    @info("Generating gRPC client", protos, outdir)
 
     # determine the package name and service name
-    package, services = detect_services(proto)
-    protodir = dirname(proto)
-    includeflag = `-I=$protodir`
-    for inc in includes
-        includeflag = `$includeflag -I=$inc`
+    packages, services = String[], String[]
+    for proto in protos
+        package, _services = detect_services(proto)
+        push!(packages, package)
+        append!(services, _services)
     end
-    @info("Detected", package, services, includes)
+    package = only(unique(packages))
+
+    includeflags = map(protos) do proto
+        protodir = dirname.(proto)
+        "-I=$protodir"
+    end
+    includeflags = unique(includeflags)
+    @info "Detected" package services includeflags
 
     # generate protobuf services
     mkpath(outdir)
     bindir = Sys.BINDIR
     pathenv = string(ENV["PATH"], Sys.iswindows() ? ";" : ":", bindir)
     withenv("PATH"=>pathenv) do
-        grpc_protoc(`$includeflag --julia_out=$outdir $proto`; protoc_path=protoc_path)
+        grpc_protoc(`$includeflags --julia_out=$outdir $protos`; protoc_path=protoc_path)
     end
 
     # include the generated code and detect service method names
@@ -179,6 +190,7 @@ function generate(proto::String; outdir::String=pwd(), includes::Vector{String}=
     open(joinpath(outdir, "$(client_module_name).jl"), "w") do grpcservice
         write_header(grpcservice, generated_module, package, client_module_name)
         for service in services
+            @info "Service: $(service)"
             methods = get_generated_method_table(string(package, "._", service, "_methods"))
             write_service(grpcservice, package, service, methods)
         end

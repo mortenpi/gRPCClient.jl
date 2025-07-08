@@ -233,9 +233,9 @@ function get_grpc_status(easy::Curl.Easy)
     # parse the grpc headers
     @debug("response headers", easy.res_hdrs)
     for hdr in easy.res_hdrs
-        if startswith(hdr, "grpc-status")
+        if startswith(hdr, "grpc-status:")
             grpc_status = parse(Int, strip(last(split(hdr, ':'; limit=2))))
-        elseif startswith(hdr, "grpc-message")
+        elseif startswith(hdr, "grpc-message:")
             grpc_message = string(strip(last(split(hdr, ':'; limit=2))))
         end
     end
@@ -303,6 +303,7 @@ function grpc_request(curlshare::Union{Nothing,Ptr{CURLSH}}, downloader::Downloa
             end
         catch ex
             forbid_reuse(easy)
+            @debug "Exception" exception = (ex, catch_backtrace())
             exception = ex
         finally # ensure handle is removed
             cleanup()
